@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/fclib.c"
+        "src/controller_helper.c"
+        "src/FeedingControllerLib.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        i2cdev
+        log
+)

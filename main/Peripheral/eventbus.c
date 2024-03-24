@@ -1,0 +1,238 @@
+#include "eventbus.h"
+
+#include <esp_event_base.h>
+#include <esp_log.h>
+#include <string.h>
+
+ESP_EVENT_DEFINE_BASE(NONE_TYPE_EVENT);
+ESP_EVENT_DEFINE_BASE(ERROR_EVENT);
+ESP_EVENT_DEFINE_BASE(WARNING_EVENT);
+ESP_EVENT_DEFINE_BASE(FEEDING_EVENT);
+ESP_EVENT_DEFINE_BASE(SYSTEM_EVENT);
+ESP_EVENT_DEFINE_BASE(INTERACTION_EVENT);
+ESP_EVENT_DEFINE_BASE(ERROR_FIXED_EVENT);
+ESP_EVENT_DEFINE_BASE(DEBUG_EVENT);
+ESP_EVENT_DEFINE_BASE(VERBOSE_EVENT);
+
+esp_event_loop_handle_t eventbus;
+
+static const char* TAG = "eventbus";
+
+static const EventStrMap_t eventMap[] = {
+    {EFEEDER_OK, "OK"},
+    {EFEEDER_FAIL, "FAIL"},
+
+    /* ERROR EVENTS */
+    {EFEEDER_DRIVER_ERROR, "DRIVER_ERROR"},
+    {EFEEDER_THROWER_ERROR, "THROWER_STALL"},
+    {EFEEDER_DOSING_ERROR, "DOSING_STALL"},
+    {EFEEDER_UNDER_VOLTAGE, "UNDER_VOLTAGE"},
+    {EFEEDER_OVER_VOLTAGE, "OVER_VOLTAGE"},
+    {EFEEDER_STORAGE_ERROR, "STORAGE_ERROR"},
+    {EFEEDER_RTC_ERROR, "RTC_ERROR"},
+    {EFEEDER_DATE_INVALID, "DATE_INVALID"},
+    {EFEEDER_NO_FEED_FLOW, "NO_FEED_FLOW"},
+    {EFEEDER_THROWER_NOT_DETECTED, "THROWER_NOT_DETECTED"},
+    {EFEEDER_DOSING_NOT_DETECTED, "DOSING_NOT_DETECTED"},
+    {EFEEDER_FOTA_FAILED, "FOTA_INTERNET_FAILED"},
+
+    /* WARNING EVENTS */
+    {EFEEDER_FW_UPGRADE_FAIL, "FIRMWARE_UPGRADE_FAIL"},
+    {EFEEDER_NORFLASH_ERASE, "ERASE_FEEDLOG"},
+    {EFEEDER_TRANSFER_FAIL, "TRANSFER_FAIL"},
+    {EFEEDER_ATMEGA_PING_FAILED, "CONTROLLER_CHECK_FAILED"},
+    {EFEEDER_PUBLISHING_MQTT_FAILED, "PUBLISHING_MQTT_FAILED"},
+    {EFEEDER_STORAGE_CORRUPTED, "STORAGE_CORRUPTED"},
+    {EFEEDER_IDENTITY_ERASED, "IDENTITY_ERASED"},
+
+    /* INFO: FEEDING EVENTS */
+    {EFEEDER_IDLE, "ALL_MOTOR_STOP"},
+    {EFEEDER_STARTING, "THROWER_STARTING"},
+    {EFEEDER_STOPPING, "DOSING_STOP"},
+    {EFEEDER_FEEDING, "DOSING_STARTING"},
+    {EFEEDER_FEEDING_DONE, "FEEDING_STOP_BY_TIMER"},
+    {EFEEDER_CLEANING_DONE, "CLEANING_DONE"},
+
+    /* INFO: SYSTEM EVENTS */
+    {EFEEDER_BOOTING, "BOOTING"},
+    {EFEEDER_BOOTING_SUCCESS, "BOOTING_SUCCESS"},
+    {EFEEDER_LOAD_APP, "LOAD_APP"},
+    {EFEEDER_FAIL_SAFE_MODE, "FAIL_SAFE_MODE"},
+    {EFEEDER_PROVISIONING, "PROVISIONING"},
+    {EFEEDER_WAITING_TO_BE_PROVISIONED, "WAITING_TO_BE_PROVISIONED"},
+    {EFEEDER_SWITCH_TO_STATION, "SWITCH_TO_STATION"},
+    {EFEEDER_SWITCH_TO_AP, "SWITCH_TO_AP"},
+    {EFEEDER_CONNECTED_TO_AP_NOT_INTERNET, "CONNECTED_TO_AP_NOT_INTERNET"},
+    {EFEEDER_DISCONNECTED_FROM_AP, "DISCONNECTED_FROM_AP"},
+    {EFEEDER_FW_UPGRADE_READY, "FIRMWARE_UPGRADE_READY"},
+    {EFEEDER_FW_UPGRADING, "UPGRADING_FIRMWARE"},
+    {EFEEDER_FW_UPGRADE_SUCCESS, "FIRMWARE_UPGRADE_SUCCESS"},
+    {EFEEDER_FEEDLOG_READY_TO_SENT, "FEEDLOG_READY_TO_SENT"},
+    {EFEEDER_SYSLOG_READY_TO_SENT, "SYSLOG_READY_TO_SENT"},
+    {EFEEDER_POWER_OFF, "POWER_OFF"},
+    {EFEEDER_MQTT_CONNECTED, "MQTT_CONNECTED"},
+    {EFEEDER_FEEDLOG_PRODUCED, "FEEDLOG_PRODUCED"},
+    {EFEEDER_SCHEDULE_START, "SCHEDULE_START"},
+    {EFEEDER_TEST_RUN_START, "TEST_RUN_START"},
+    {EFEEDER_CALIBRATE_FLOWRATE_START, "CALIBRATE_FLOWRATE_START"},
+    {EFEEDER_SET_FEEDING_STOP, "SET_FEEDING_STOP"},
+    {EFEEDER_ATMEGA_PING, "CONTROLLER_CHECK"},
+    {EFEEDER_ATMEGA_SERIAL, "ATMEGA_SERIAL"},
+    {EFEEDER_DEVICE_CONFIG_UPDATED, "DEVICE_CONFIG_UPDATED"},
+    {EFEEDER_TIME_SYNC_HAS_OFFSET, "TIME_SYNC_HAS_OFFSET"},
+    {EFEEDER_RELOAD_SCHEDULE, "RELOAD_SCHEDULE"},
+
+    /* INTERACTION EVENTS */
+    {EFEEDER_TIME_GET_HTTP_REQUEST, "TIME_GET_HTTP_REQUEST"},
+    {EFEEDER_TIME_GET_HTTP_RESPONSE, "TIME_GET_HTTP_RESPONSE"},
+    {EFEEDER_TIME_POST_HTTP_REQUEST, "TIME_POST_HTTP_REQUEST"},
+    {EFEEDER_TIME_POST_HTTP_RESPONSE, "TIME_POST_HTTP_RESPONSE"},
+    {EFEEDER_SETTING_GET_HTTP_REQUEST, "SETTING_GET_HTTP_REQUEST"},
+    {EFEEDER_SETTING_GET_HTTP_RESPONSE, "SETTING_GET_HTTP_RESPONSE"},
+    {EFEEDER_SETTING_POST_HTTP_REQUEST, "SETTING_POST_HTTP_REQUEST"},
+    {EFEEDER_SETTING_POST_HTTP_RESPONSE, "SETTING_POST_HTTP_RESPONSE"},
+    {EFEEDER_SCHEDULES_GET_HTTP_REQUEST, "SCHEDULES_GET_HTTP_REQUEST"},
+    {EFEEDER_SCHEDULES_GET_HTTP_RESPONSE, "SCHEDULES_GET_HTTP_RESPONSE"},
+    {EFEEDER_SCHEDULES_POST_HTTP_REQUEST, "SCHEDULES_POST_HTTP_REQUEST"},
+    {EFEEDER_SCHEDULES_POST_HTTP_RESPONSE, "SCHEDULES_POST_HTTP_RESPONSE"},
+    {EFEEDER_TEST_RUN_HTTP_REQUEST, "TEST_RUN_HTTP_REQUEST"},
+    {EFEEDER_TEST_RUN_HTTP_RESPONSE, "TEST_RUN_HTTP_RESPONSE"},
+    {EFEEDER_CALIBRATE_POST_HTTP_REQUEST, "CALIBRATE_POST_HTTP_REQUEST"},
+    {EFEEDER_CALIBRATE_POST_HTTP_RESPONSE, "CALIBRATE_POST_HTTP_RESPONSE"},
+    {EFEEDER_CURRENT_SENSOR_GET_HTTP_REQUEST, "CURRENT_SENSOR_GET_HTTP_REQUEST"},
+    {EFEEDER_CURRENT_SENSOR_GET_HTTP_RESPONSE, "CURRENT_SENSOR_GET_HTTP_RESPONSE"},
+    {EFEEDER_CURRENT_SENSOR_POST_HTTP_REQUEST, "CURRENT_SENSOR_POST_HTTP_REQUEST"},
+    {EFEEDER_CURRENT_SENSOR_POST_HTTP_RESPONSE, "CURRENT_SENSOR_POST_HTTP_RESPONSE"},
+    {EFEEDER_INFO_GET_HTTP_REQUEST, "INFO_GET_HTTP_REQUEST"},
+    {EFEEDER_INFO_GET_HTTP_RESPONSE, "INFO_GET_HTTP_RESPONSE"},
+    {EFEEDER_DOWNLOAD_FEEDLOG, "DOWNLOAD_FEEDLOG"},
+    {EFEEDER_CURRENT_SENSOR_GET_VIA_WEBBROWSER, "CURRENT_SENSOR_GET_VIA_WEBBROWSER"},
+    {EFEEDER_CURRENT_SENSOR_POST_VIA_WEBBROWSER, "CURRENT_SENSOR_POST_VIA_WEBBROSER"},
+    {EFEEDER_RUN_BUTTON_PRESSED, "RUN_BUTTON_PRESSED"},
+    {EFEEDER_RUN_BUTTON_LONG_PRESSED, "RUN_BUTTON_LONG_PRESSED"},
+    {EFEEDER_DISP_ENTER_BUTTON_PRESSED, "DISP_ENTER_BUTTON_PRESSED"},
+    {EFEEDER_DISP_MINUS_BUTTON_PRESSED, "DISP_MINUS_BUTTON_PRESSED"},
+    {EFEEDER_DISP_PLUS_BUTTON_PRESSED, "DISP_PLUS_BUTTON_PRESSED"},
+    {EFEEDER_DISP_MENU_BUTTON_PRESSED, "DISP_MENU_BUTTON_PRESSED"},
+
+    /* DEBUG EVENTS */
+    {EFEEDER_BL_CONNECTED, "BLUETOOTH_CONNECTED"},
+    {EFEEDER_BL_DISCONNECTED, "BLUETOOTH_DISCONNECTED"},
+    {EFEEDER_BL_RECEIVING, "BLUETOOTH_RECEIVING"},
+    {EFEEDER_BL_SENDING, "BLUETOOTH_SENDING"},
+    {EFEEDER_WIFI_CONNECTED, "WIFI_CONNECTED"},
+    {EFEEDER_WIFI_DISCONNECTED, "WIFI_DISCONNECTED"},
+    {EFEEDER_WIFI_RECEIVING, "WIFI_RECEIVING"},
+    {EFEEDER_WIFI_SENDING, "WIFI_SENDING"},
+    {EFEEDER_TRANSFER_SUCCESS, "WIFI_TRANSFER_SUCCESS"},
+
+    /* ERROR FIXED EVENTS */
+    {EFEEDER_DRIVER_ERROR_FIXED, "DRIVER_ERROR_FIXED"},
+    {EFEEDER_THROWER_ERROR_FIXED, "THROWER_STALL_FIXED"},
+    {EFEEDER_DOSING_ERROR_FIXED, "DOSING_STALL_FIXED"},
+    {EFEEDER_UNDER_VOLTAGE_FIXED, "UNDER_VOLTAGE_FIXED"},
+    {EFEEDER_OVER_VOLTAGE_FIXED, "OVER_VOLTAGE_FIXED"},
+    {EFEEDER_STORAGE_ERROR_FIXED, "STORAGE_ERROR_FIXED"},
+    {EFEEDER_RTC_ERROR_FIXED, "RTC_ERROR_FIXED"},
+    {EFEEDER_DATE_INVALID_FIXED, "DATE_INVALID_FIXED"},
+    {EFEEDER_NO_FEED_FLOW_FIXED, "NO_FEED_FLOW_FIXED"},
+    {EFEEDER_THROWER_NOT_DETECTED_FIXED, "THROWER_NOT_DETECTED_FIXED"},
+    {EFEEDER_DOSING_NOT_DETECTED_FIXED, "DOSING_NOT_DETECTED_FIXED"},
+};
+
+const char* event_to_str(int type, int desc) {
+    int eventNum = event_to_id(type, desc);
+    for (uint32_t i = 0; i < (sizeof(eventMap) / sizeof(EventStrMap_t)); i++) {
+        if (eventMap[i].name == eventNum) return eventMap[i].str;
+    }
+    return NULL;
+}
+
+int32_t event_to_id(int type, int desc) {
+    return type * 100 + desc;
+}
+
+esp_err_t eventbus_init(void) {
+    esp_event_loop_args_t event_loop_args = {
+        .queue_size = 20,
+        .task_name = "eventbus",
+        .task_priority = 10,
+        .task_stack_size = 6144,
+        .task_core_id = tskNO_AFFINITY};
+
+    return esp_event_loop_create(&event_loop_args, &eventbus);
+}
+
+esp_err_t eventbus_post(const char* tag, cobox_event_t event, const char* message) {
+    char* passed_msg = NULL;
+    size_t msg_len = 0;
+    esp_err_t res = ESP_OK;
+
+    if (message) {
+        passed_msg = (char*)malloc(sizeof(char) * (strlen(message) + 1));
+        memcpy(passed_msg, message, strlen(message) + 1);
+        msg_len = strlen(passed_msg) + 1;
+    }
+
+    if (event <= EFEEDER_ERROR_EVENT_LIMIT) {
+        res = esp_event_post_to(eventbus, ERROR_EVENT, event, passed_msg, msg_len, portMAX_DELAY);
+    } else if (event <= EFEEDER_WARNING_EVENT_LIMIT) {
+        res = esp_event_post_to(eventbus, WARNING_EVENT, event, passed_msg, msg_len, portMAX_DELAY);
+    } else if (event <= EFEEDER_FEEDING_EVENT_LIMIT) {
+        res = esp_event_post_to(eventbus, FEEDING_EVENT, event, passed_msg, msg_len, portMAX_DELAY);
+    } else if (event <= EFEEDER_SYSTEM_EVENT_LIMIT) {
+        res = esp_event_post_to(eventbus, SYSTEM_EVENT, event, passed_msg, msg_len, portMAX_DELAY);
+    } else if (event <= EFEEDER_INTERACTION_LIMIT) {
+        res = esp_event_post_to(eventbus, INTERACTION_EVENT, event, passed_msg, msg_len, portMAX_DELAY);
+    } else if (event <= EFEEDER_DEBUG_EVENT_LIMIT) {
+        res = esp_event_post_to(eventbus, DEBUG_EVENT, event, passed_msg, msg_len, portMAX_DELAY);
+    } else if (event <= EFEEDER_ERROR_FIXED_EVENT_LIMIT) {
+        res = esp_event_post_to(eventbus, ERROR_FIXED_EVENT, event, passed_msg, msg_len, portMAX_DELAY);
+    }
+
+    if (res != ESP_OK) {
+        ESP_LOGE(TAG, "Failed post event to event bus: (%d) %s", res, esp_err_to_name(res));
+    }
+
+    if (passed_msg) {
+        free(passed_msg);
+    }
+
+    return res;
+}
+
+void eventbus_register_EVENT(esp_event_base_t event_base, int32_t event_id, esp_event_handler_t handler) {
+    ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
+        eventbus, event_base, event_id, handler, NULL, NULL));
+}
+
+void eventbus_register_ANY(esp_event_handler_t handler) {
+    ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
+        eventbus, ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, handler, NULL, NULL));
+}
+
+void eventbus_register_INFO(esp_event_handler_t handler) {
+    for (cobox_event_t i = EFEEDER_DRIVER_ERROR; i <= EFEEDER_ERROR_EVENT_LIMIT; i++) {
+        ESP_ERROR_CHECK(esp_event_handler_instance_register_with(eventbus, ERROR_EVENT, i, handler, NULL, NULL));
+    }
+
+    for (cobox_event_t i = EFEEDER_FW_UPGRADE_FAIL; i <= EFEEDER_WARNING_EVENT_LIMIT; i++) {
+        ESP_ERROR_CHECK(esp_event_handler_instance_register_with(eventbus, WARNING_EVENT, i, handler, NULL, NULL));
+    }
+
+    for (cobox_event_t i = EFEEDER_IDLE; i <= EFEEDER_FEEDING_EVENT_LIMIT; i++) {
+        ESP_ERROR_CHECK(esp_event_handler_instance_register_with(eventbus, FEEDING_EVENT, i, handler, NULL, NULL));
+    }
+
+    for (cobox_event_t i = EFEEDER_BOOTING; i <= EFEEDER_SYSTEM_EVENT_LIMIT; i++) {
+        ESP_ERROR_CHECK(esp_event_handler_instance_register_with(eventbus, SYSTEM_EVENT, i, handler, NULL, NULL));
+    }
+
+    for (cobox_event_t i = EFEEDER_TIME_GET_HTTP_REQUEST; i <= EFEEDER_INTERACTION_LIMIT; i++) {
+        ESP_ERROR_CHECK(esp_event_handler_instance_register_with(eventbus, INTERACTION_EVENT, i, handler, NULL, NULL));
+    }
+
+    for (cobox_event_t i = EFEEDER_DRIVER_ERROR_FIXED; i <= EFEEDER_ERROR_FIXED_EVENT_LIMIT; i++) {
+        ESP_ERROR_CHECK(esp_event_handler_instance_register_with(eventbus, ERROR_FIXED_EVENT, i, handler, NULL, NULL));
+    }
+}
